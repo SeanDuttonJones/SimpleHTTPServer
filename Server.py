@@ -13,19 +13,44 @@ class HttpStatus():
     Not_Found           = 404
     Length_Required     = 411
 
+    CODES = [
+        200,
+        304,
+        400,
+        403,
+        404,
+        411
+    ]
+
+    _messages = {
+        OK: "OK",
+        Not_Modified: "Not Modified",
+        Bad_Request: "Bad Request",
+        Forbidden: "Forbidden",
+        Not_Found: "Not Found",
+        Length_Required: "Length Required"
+    }
+
+    @classmethod
+    def message(HttpStatus, code):
+        if code not in HttpStatus._messages.keys():
+            raise ValueError("Unknown status code: " + code)
+        
+        return HttpStatus._messages[code]
+
 class ConsoleLogger():
     def __init__(self):
         pass
 
     def server(self, message):
-        log = f"Server: {message}"
+        log = f"[Server]: {message}"
         print(log)
 
-    def http_connection(self, message, response_code):
+    def http_connection(self, message, status_code):
         """
         params
         message: HTTPMessage object
-        response_code: HTTP response code
+        status_code: HTTP response code
         """
         method = message.get_method()
         resource = message.get_resource()
@@ -34,7 +59,7 @@ class ConsoleLogger():
 
         now = datetime.datetime.now()
 
-        log = f"{headers['Host']} - - [{now}] \"{method} {resource} {version}\" {response_code}"
+        log = f"[Http]: {headers['Host']} - - [{now}] \"{method} {resource} {version}\" {status_code} {HttpStatus.message(status_code)}"
         print(log)
 
 class HttpRequest():
@@ -72,66 +97,67 @@ class HttpRequest():
         return self.headers
     
 class HttpResponse():
-    def __init__(self):
-        self.version = "HTTP/1.1"
-        self.status_code = 200
+    def __init__(self, status_code):
+        self._version = "HTTP/1.1"
+        self._status_code = status_code
         
-        self.headers = {
-            "Date: ": formatdate(timeval=None, localtime=False, usegmt=True),
-            "Server: ": "SimpleHTTPServer/1.0"
+        self._headers = {
+            "Date": formatdate(timeval=None, localtime=False, usegmt=True),
+            "Server": "SimpleHTTPServer/1.0"
         }
 
-        self.data = None
+        self._data = None
+    
+    @property
+    def version(self):
+        return self._version
+    
+    @version.setter
+    def version(self, value):
+        if value != "HTTP/1.1":
+            raise ValueError("Unsupported HTTP version: " + value + ". Only HTTP/1.1 is supported")
         
-    def set_version(self, version):
-        """
-        params
-        version: HTTP version. e.g., HTTP/1.1
-        """
-        self.version = version
+        self._version = value
 
-    def set_status_code(self, status_code):
-        """
-        params
-        status_code: HTTP response code. e.g., 200
+    @property
+    def status_code(self):
+        return self._status_code
 
-        The corresponding response message will be added.
-        """
-        self.status_code = status_code
+    @status_code.setter
+    def status_code(self, value):
+        if value not in HttpStatus.CODES:
+            raise ValueError("Unknown status code: " + value)
+        
+        self._status_code = value
 
-    def set_headers(self, headers, overwrite=False):
-        """
-        params
-        headers: dict of http headers
-        overwrite: indicates if the headers should be exactly as specified in the parameters. Otherwise
-                    the headers will be added to the defaults
-        """
+    @property
+    def headers(self):
+        return self._headers
+    
+    @headers.setter
+    def headers(self, value, overwrite=False):
         if overwrite:
-            self.headers = headers
-            return headers
+            self.headers = value
         
-        self.headers.update(headers)
-        return headers
+        self._headers.update(value)
 
-    def set_data(self, data):
-        """
-        params
-        data: requested data
-        """
-        self.data = data
+    @property
+    def data(self):
+        return self._data
 
-    def get_response(self):
-        """
-        Generates HTTP response
-        """
+    @data.setter
+    def data(self, value):
+        self._data = value
+
+    def _generate_response(self):
         line_break = "\r\n"
         
         # set status line
-        response = f"{self.version} {self.status_code}" + line_break
+        response = f"{self._version} {self.status_code} {HttpStatus.message(self.status_code)}" + line_break
         
         # set headers
         for _, (key, value) in enumerate(self.headers.items()):
-            response += f"{key.lower().capitalize()} {value}" + line_break
+            response += f"{key.lower().capitalize()}: {value}" + line_break
         
         # add additional line break to indicate next section is the data
         response += line_break
@@ -140,7 +166,14 @@ class HttpResponse():
         if self.data is not None:
             response += self.data
 
-        return response.encode()
+        return response
+    
+    @property
+    def response(self):
+        return self._generate_response().encode()
+    
+    def __repr__(self):
+        return self._generate_response()
 
 class HttpServer(Thread):
     def __init__(self):
@@ -190,18 +223,17 @@ class HttpServer(Thread):
 
             # Send the reply
             resource = message.get_resource()
-            response = HttpResponse()
-            status_code = 200
+            response = None
             
             if resource in self.routes.keys():
-                response.set_data(self.routes[resource]())
+                response = HttpResponse(HttpStatus.OK)
+                response.data = self.routes[resource]()
 
             else:
-                status_code = 403
+                response = HttpResponse(HttpStatus.Not_Found)
             
-            response.set_status_code(status_code)
-            connection.send(response.get_response())
-            logger.http_connection(message, status_code)
+            connection.send(response.response)
+            logger.http_connection(message, response.status_code)
 
             # Close connection too client (but not welcoming socket)
             connection.close()
