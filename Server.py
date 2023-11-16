@@ -3,6 +3,7 @@ from socket import *
 from threading import Thread
 import datetime
 from email.utils import formatdate
+from typing import Any
 
 class ConsoleLogger():
     def __init__(self):
@@ -28,7 +29,7 @@ class ConsoleLogger():
         log = f"{headers['Host']} - - [{now}] \"{method} {resource} {version}\" {response_code}"
         print(log)
 
-class HTTPRequest():
+class HttpRequest():
     def __init__(self, message):
         self.message = message
         
@@ -62,53 +63,94 @@ class HTTPRequest():
     def get_headers(self):
         return self.headers
     
-class HTTPResponse():
+class HttpResponse():
     def __init__(self):
         self.version = "HTTP/1.1"
-        self.code = 200
-        self.status_line = f"{self.version} {self.code}"
+        self.status_code = 200
+        
         self.headers = {
             "Date: ": formatdate(timeval=None, localtime=False, usegmt=True),
             "Server: ": "SimpleHTTPServer/1.0"
         }
 
-    def set_version(version):
+        self.data = None
+        
+    def set_version(self, version):
         """
         params
         version: HTTP version. e.g., HTTP/1.1
         """
-        pass
+        self.version = version
 
-    def set_status_code(status_code):
+    def set_status_code(self, status_code):
         """
         params
         status_code: HTTP response code. e.g., 200
 
         The corresponding response message will be added.
         """
-        pass
+        self.status_code = status_code
 
-    def set_headers(headers):
+    def set_headers(self, headers, overwrite=False):
         """
         params
         headers: dict of http headers
+        overwrite: indicates if the headers should be exactly as specified in the parameters. Otherwise
+                    the headers will be added to the defaults
         """
-        pass
+        if overwrite:
+            self.headers = headers
+            return headers
+        
+        self.headers.update(headers)
+        return headers
 
-    def set_data(data):
+    def set_data(self, data):
         """
         params
         data: requested data
         """
-        pass
+        self.data = data
 
-    def get_response():
+    def get_response(self):
         """
         Generates HTTP response
         """
-        pass
+        line_break = "\r\n"
+        
+        # set status line
+        response = f"{self.version} {self.status_code}" + line_break
+        
+        # set headers
+        for _, (key, value) in enumerate(self.headers.items()):
+            response += f"{key.lower().capitalize()} {value}" + line_break
+        
+        # add additional line break to indicate next section is the data
+        response += line_break
 
-class HTTPServer(Thread):
+        # set data
+        if self.data is not None:
+            response += self.data
+
+        return response.encode()
+
+class HttpServer(Thread):
+    def __init__(self):
+        Thread.__init__(self)
+        self.routes = {}
+
+
+    def route(self, endpoint):
+        def add_rule(view_func=None):
+            if view_func is None:
+                raise ValueError("view_func cannot be None")
+        
+            self.routes[endpoint] = view_func
+
+            return view_func
+        
+        return add_rule
+    
     def run(self):
         # Specify Server Port
         port = 80
@@ -131,7 +173,7 @@ class HTTPServer(Thread):
             request = connection.recv(1024).decode()
 
             # print(request)
-            message = HTTPRequest(request)
+            message = HttpRequest(request)
             # print("METHOD:", message.get_method())
             # print("RESOURCE:", message.get_resource())
             # print("VERSION:", message.get_version())
@@ -139,15 +181,30 @@ class HTTPServer(Thread):
 
 
             # Send the reply
-            if message.get_resource() == "/":
-                with open("test.html") as f:
-                    data = f.read()
-                    connection.send(data.encode())
+            resource = message.get_resource()
+            response = HttpResponse()
+            status_code = 200
+            
+            if resource in self.routes.keys():
+                response.set_data(self.routes[resource]())
 
-            logger.http_connection(message, 200)
+            else:
+                status_code = 403
+            
+            response.set_status_code(status_code)
+            connection.send(response.get_response())
+            logger.http_connection(message, status_code)
 
             # Close connection too client (but not welcoming socket)
             connection.close()
 
-s = HTTPServer()
-s.start()
+server = HttpServer()
+
+@server.route("/")
+def index():
+    with open("test.html") as f:
+        data = f.read()
+
+    return data
+
+server.start()
