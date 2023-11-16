@@ -5,6 +5,14 @@ import datetime
 from email.utils import formatdate
 from typing import Any
 
+class HttpStatus():
+    OK                  = 200
+    Not_Modified        = 304
+    Bad_Request         = 400
+    Forbidden           = 403
+    Not_Found           = 404
+    Length_Required     = 411
+
 class ConsoleLogger():
     def __init__(self):
         pass
