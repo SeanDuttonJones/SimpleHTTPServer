@@ -37,6 +37,21 @@ class HttpStatus():
             raise ValueError("Unknown status code: " + code)
         
         return HttpStatus._messages[code]
+    
+class HttpMethod():
+    GET         = "GET"
+    POST        = "POST"
+    HEAD        = "HEAD"
+    PUT         = "PUT"
+    DELETE      = "DELETE"
+
+    METHODS = [
+        GET,
+        POST,
+        HEAD,
+        PUT,
+        DELETE
+    ]
 
 class ConsoleLogger():
     def __init__(self):
@@ -46,56 +61,105 @@ class ConsoleLogger():
         log = f"[Server]: {message}"
         print(log)
 
-    def http_connection(self, message, status_code):
+    def http_connection(self, request, status_code):
         """
         params
-        message: HTTPMessage object
-        status_code: HTTP response code
+        message: HttpRequest object
+        status_code: Http status code
         """
-        method = message.get_method()
-        resource = message.get_resource()
-        version = message.get_version()
-        headers = message.get_headers()
+        method = request.method
+        resource = request.url
+        version = request.version
+        headers = request.headers
 
         now = datetime.datetime.now()
 
         log = f"[Http]: {headers['Host']} - - [{now}] \"{method} {resource} {version}\" {status_code} {HttpStatus.message(status_code)}"
         print(log)
 
-class HttpRequest():
-    def __init__(self, message):
-        self.message = message
-        
+class HttpRequestParser():
+    
+    def parse(self, message):
         decode = message.split("\r\n")
         
         request_line = decode[0]
         method, resource, version = request_line.split(" ")
-        self.method = method.strip()
-        self.resource = resource.strip()
-        self.version = version.strip()
+        method = method.strip()
+        resource = resource.strip()
+        version = version.strip()
         
-        self.headers = {}
-        for item in decode[1:]:
-            if item == "":
-                continue
-
+        headers = {}
+        for item in decode[1:-2]:
             key, value = item.split(": ")
             key = key.strip()
             value = value.strip()
-            self.headers[key] = value
+            headers[key] = value
 
-    def get_method(self):
-        return self.method
-    
-    def get_resource(self):
-        return self.resource
-    
-    def get_version(self):
-        return self.version
+        data = decode[-1]
 
-    def get_headers(self):
-        return self.headers
+        request = HttpRequest()
+        request.method = method
+        request.url = resource
+        request.version = version
+        request.headers = headers
+        request.data = data
+
+        return request
+
+class HttpRequest():
+    def __init__(self):
+        self._method = None
+        self._url = None
+        self._version = None
+        self._headers = {}
+        self._data = None
+
+    @property
+    def method(self):
+        return self._method
     
+    @method.setter
+    def method(self, value):
+        if value not in HttpMethod.METHODS:
+            raise ValueError("Unknown method: " + value)
+        
+        self._method = value
+
+    @property
+    def url(self):
+        return self._url
+    
+    @url.setter
+    def url(self, value):
+        self._url = value
+
+    @property
+    def version(self):
+        return self._version
+    
+    @version.setter
+    def version(self, value):
+        if value != "HTTP/1.1":
+            raise ValueError("Unsupported HTTP version: " + value + " .Only HTTP/1.1 is supported")
+        
+        self._version = value
+
+    @property
+    def headers(self):
+        return self._headers
+    
+    @headers.setter
+    def headers(self, value):
+        self._headers = value
+
+    @property
+    def data(self):
+        return self._data
+    
+    @data.setter
+    def data(self, value):
+        self._data = value
+
 class HttpResponse():
     def __init__(self, status_code):
         self._version = "HTTP/1.1"
@@ -211,18 +275,14 @@ class HttpServer(Thread):
             connection, addr = tcp_socket.accept()
 
             # Read from socket (but not address as in UDP)
-            request = connection.recv(1024).decode()
+            message = connection.recv(1024).decode()
 
-            # print(request)
-            message = HttpRequest(request)
-            # print("METHOD:", message.get_method())
-            # print("RESOURCE:", message.get_resource())
-            # print("VERSION:", message.get_version())
-            # print("HEADERS:", message.get_headers())
-
+            # Parse Http request
+            parser = HttpRequestParser()
+            request = parser.parse(message)
 
             # Send the reply
-            resource = message.get_resource()
+            resource = request.url
             response = None
             
             if resource in self.routes.keys():
@@ -233,7 +293,7 @@ class HttpServer(Thread):
                 response = HttpResponse(HttpStatus.Not_Found)
             
             connection.send(response.response)
-            logger.http_connection(message, response.status_code)
+            logger.http_connection(request, response.status_code)
 
             # Close connection too client (but not welcoming socket)
             connection.close()
