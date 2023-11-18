@@ -61,23 +61,29 @@ class ConsoleLogger():
         log = f"[Server]: {message}"
         print(log)
 
-    def http_connection(self, request, status_code):
+    def http_connection(self, status_code, request=None):
         """
         params
         message: HttpRequest object
         status_code: Http status code
         """
-        method = request.method
-        resource = request.url
-        version = request.version
-        headers = request.headers
-
         now = datetime.datetime.now()
+        
+        if request is None:
+            log = f"[Http]: [{now}] {status_code} {HttpStatus.message(status_code)}"
 
-        log = f"[Http]: {headers['Host']} - - [{now}] \"{method} {resource} {version}\" {status_code} {HttpStatus.message(status_code)}"
+        else:
+            method = request.method
+            resource = request.url
+            version = request.version
+            headers = request.headers
+
+            log = f"[Http]: {headers['Host']} - - [{now}] \"{method} {resource} {version}\" {status_code} {HttpStatus.message(status_code)}"
+        
         print(log)
 
 class HttpRequestParser():
+    
     def parse(self, message):
         split = message.split("\r\n")
         method, url, version = map(str.strip, split[0].split(" "))
@@ -87,7 +93,7 @@ class HttpRequestParser():
             if header == "": # signals double \r\n \r\n. This means we have reached the end of the headers
                 break
 
-            key, value = map(str.strip, header.split(":"))
+            key, value = map(str.strip, header.split(": "))
             headers[key] = value
 
         data = split[-1]
@@ -100,6 +106,12 @@ class HttpRequestParser():
         request.data = data
 
         return request
+
+class HttpException(Exception):
+    """ Raised when an Http exception occurs """
+    def __init__(self, status_code, *args):
+        super().__init__(*args)
+        self.status_code = status_code
 
 class HttpRequestHandler():
     
@@ -115,31 +127,41 @@ class HttpRequestHandler():
             request = parser.parse(message)
         except Exception:
             response = HttpResponse(HttpStatus.Bad_Request)
-            self.logger.http_connection(request, response.status_code)
+            self.logger.http_connection(response.status_code, request)
             return response
         
         if request.method in ["POST", "PUT"] and "Content-Length" not in request.headers.keys():
             response = HttpResponse(HttpStatus.Length_Required)
-            self.logger.http_connection(request, response.status_code)
+            self.logger.http_connection(response.status_code, request)
             return response
 
         # Can eventually be replaced with a routing system which would handle url variables, methods, etc.
         # --------------------------------------------
         url = request.url
         if url in routes.keys():
-            response = HttpResponse(HttpStatus.OK)
-
-            if len(routes[url]["args"]) > 0:
-                response.data = routes[url]["view_func"](request)
-            else:
-                response.data = routes[url]["view_func"]()
+            try:
+                response = HttpResponse(HttpStatus.OK)
+                if len(routes[url]["args"]) > 0:
+                    self._set_response_data(response, routes[url]["view_func"](request))
+                else:
+                    self._set_response_data(response, routes[url]["view_func"]())
+            except HttpException as e:
+                response = HttpResponse(e.status_code)
 
         else:
             response = HttpResponse(HttpStatus.Not_Found)
         # --------------------------------------------
 
-        self.logger.http_connection(request, response.status_code)
+        self.logger.http_connection(response.status_code, request)
         return response
+    
+    def _set_response_data(self, response, data):
+        d = ""
+        if data is not None:
+            d = data
+
+        response.data = d
+            
         
 class HttpRequest():
     def __init__(self):
@@ -309,6 +331,9 @@ class HttpServer(Thread):
         
         return add_rule
     
+    def abort(self, status_code):
+        raise HttpException(status_code)
+    
     def run(self):
         port = 80
         tcp_socket = socket(AF_INET, SOCK_STREAM)
@@ -342,5 +367,9 @@ def index(request):
         data = f.read()
 
     return data
+
+@server.route("/forbidden")
+def forbidden(request):
+    server.abort(403)
 
 server.start()
