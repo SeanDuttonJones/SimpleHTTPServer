@@ -4,6 +4,7 @@ from threading import Thread
 import datetime
 from email.utils import formatdate
 from inspect import getfullargspec
+from os import isatty
 
 class HttpStatus():
     OK                  = 200
@@ -31,8 +32,8 @@ class HttpStatus():
         Length_Required: "Length Required"
     }
 
-    @classmethod
-    def message(HttpStatus, code):
+    @staticmethod
+    def message(code):
         if code not in HttpStatus._messages.keys():
             raise ValueError("Unknown status code: " + code)
         
@@ -58,7 +59,11 @@ class ConsoleLogger():
         pass
 
     def server(self, message):
-        log = f"[Server]: {message}"
+        color_code = ""
+        if self._is_color_capable():
+            color_code = "\033[0;35m" # purple
+        
+        log = f"{color_code}[Server]: {message}"
         print(log)
 
     def http_connection(self, status_code, request=None):
@@ -67,10 +72,17 @@ class ConsoleLogger():
         message: HttpRequest object
         status_code: Http status code
         """
+        color_code = ""
+        if self._is_color_capable():
+            if status_code == HttpStatus.OK:
+                color_code = "\033[1;32m" # light green
+            else:
+                color_code = "\033[0;33m" # brown
+        
         now = datetime.datetime.now()
         
         if request is None:
-            log = f"[Http]: [{now}] {status_code} {HttpStatus.message(status_code)}"
+            log = f"{color_code}[Http]: [{now}] {status_code} {HttpStatus.message(status_code)}"
 
         else:
             method = request.method
@@ -78,9 +90,12 @@ class ConsoleLogger():
             version = request.version
             headers = request.headers
 
-            log = f"[Http]: {headers['Host']} - - [{now}] \"{method} {resource} {version}\" {status_code} {HttpStatus.message(status_code)}"
+            log = f"{color_code}[Http]: {headers['Host']} - - [{now}] \"{method} {resource} {version}\" {status_code} {HttpStatus.message(status_code)}"
         
         print(log)
+
+    def _is_color_capable(self):
+        return isatty(0)
 
 class HttpRequestParser():
     
