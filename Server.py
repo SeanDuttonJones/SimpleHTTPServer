@@ -3,7 +3,7 @@ from socket import *
 from threading import Thread
 import datetime
 from email.utils import formatdate
-from typing import Any
+from inspect import getfullargspec
 
 class HttpStatus():
     OK                  = 200
@@ -78,34 +78,69 @@ class ConsoleLogger():
         print(log)
 
 class HttpRequestParser():
-    
     def parse(self, message):
-        decode = message.split("\r\n")
-        
-        request_line = decode[0]
-        method, resource, version = request_line.split(" ")
-        method = method.strip()
-        resource = resource.strip()
-        version = version.strip()
-        
+        split = message.split("\r\n")
+        method, url, version = map(str.strip, split[0].split(" "))
+
         headers = {}
-        for item in decode[1:-2]:
-            key, value = item.split(": ")
-            key = key.strip()
-            value = value.strip()
+        for header in split[1:]:
+            if header == "": # signals double \r\n \r\n. This means we have reached the end of the headers
+                break
+
+            key, value = map(str.strip, header.split(":"))
             headers[key] = value
 
-        data = decode[-1]
+        data = split[-1]
 
         request = HttpRequest()
         request.method = method
-        request.url = resource
+        request.url = url
         request.version = version
         request.headers = headers
         request.data = data
 
         return request
 
+class HttpRequestHandler():
+    
+    def __init__(self):
+        self.logger = ConsoleLogger()
+
+    def handle(self, message, routes):
+        parser = HttpRequestParser()
+        request = None
+        response = None
+        
+        try:
+            request = parser.parse(message)
+        except Exception:
+            response = HttpResponse(HttpStatus.Bad_Request)
+            self.logger.http_connection(request, response.status_code)
+            return response
+        
+        if request.method in ["POST", "PUT"] and "Content-Length" not in request.headers.keys():
+            response = HttpResponse(HttpStatus.Length_Required)
+            self.logger.http_connection(request, response.status_code)
+            return response
+
+        # Can eventually be replaced with a routing system which would handle url variables, methods, etc.
+        # --------------------------------------------
+        url = request.url
+        if url in routes.keys():
+            response = HttpResponse(HttpStatus.OK)
+
+            if len(routes[url]["args"]) > 0:
+                response.data = routes[url]["view_func"](request)
+            else:
+                response.data = routes[url]["view_func"]()
+
+        else:
+            response = HttpResponse(HttpStatus.Not_Found)
+        # --------------------------------------------
+
+        self.logger.http_connection(request, response.status_code)
+        return response
+        
 class HttpRequest():
     def __init__(self):
         self._method = None
@@ -160,6 +195,21 @@ class HttpRequest():
     def data(self, value):
         self._data = value
 
+    def __repr__(self):
+        line_break = "\r\n"
+        status_line = f"{self._method} {self._url} {self._version}" + line_break
+        response = status_line
+        
+        for _, (key, value) in enumerate(self._headers.items()):
+            response += f"{key}: {value}" + line_break
+
+        response += line_break
+
+        if self._data is not None:
+            response += self._data
+
+        return response
+
 class HttpResponse():
     def __init__(self, status_code):
         self._version = "HTTP/1.1"
@@ -167,7 +217,8 @@ class HttpResponse():
         
         self._headers = {
             "Date": formatdate(timeval=None, localtime=False, usegmt=True),
-            "Server": "SimpleHTTPServer/1.0"
+            "Server": "SimpleHTTPServer/1.0",
+            "Content-Type": "text/html; charset=utf-8"
         }
 
         self._data = None
@@ -217,26 +268,28 @@ class HttpResponse():
         line_break = "\r\n"
         
         # set status line
-        response = f"{self._version} {self.status_code} {HttpStatus.message(self.status_code)}" + line_break
+        response = f"{self._version} {self._status_code} {HttpStatus.message(self._status_code)}" + line_break
         
         # set headers
-        for _, (key, value) in enumerate(self.headers.items()):
+        for _, (key, value) in enumerate(self._headers.items()):
             response += f"{key.lower().capitalize()}: {value}" + line_break
         
         # add additional line break to indicate next section is the data
         response += line_break
+        response = response.encode()
 
         # set data
-        if self.data is not None:
-            response += self.data
+        if self._data is not None:
+            if isinstance(self._data, str):
+                data = self._data.encode()
+                content_length = len(data) // 2
+                response += data
+                self._headers["Content-Length"] = content_length
 
         return response
     
     @property
     def response(self):
-        return self._generate_response().encode()
-    
-    def __repr__(self):
         return self._generate_response()
 
 class HttpServer(Thread):
@@ -244,64 +297,47 @@ class HttpServer(Thread):
         Thread.__init__(self)
         self.routes = {}
 
-
     def route(self, endpoint):
         def add_rule(view_func=None):
             if view_func is None:
                 raise ValueError("view_func cannot be None")
-        
-            self.routes[endpoint] = view_func
+            
+            args = getfullargspec(view_func)[0] # accesses 'args'
+            self.routes[endpoint] = {"view_func": view_func, "args": args}
 
             return view_func
         
         return add_rule
     
     def run(self):
-        # Specify Server Port
         port = 80
-        # Create TCP welcoming socket
         tcp_socket = socket(AF_INET, SOCK_STREAM)
-        # Bind the server port to the socket
         tcp_socket.bind(("", port))
-        # Server begins listening for incoming TCP connections
         tcp_socket.listen(1)
 
         logger = ConsoleLogger()
         logger.server("running...")
 
-        while True: # Loop forever
-            # Server waits on accept for incoming requests.
-            # New socket created on return
+        while True:
             connection, addr = tcp_socket.accept()
 
-            # Read from socket (but not address as in UDP)
             message = connection.recv(1024).decode()
 
-            # Parse Http request
-            parser = HttpRequestParser()
-            request = parser.parse(message)
+            # Handle HTTP request
+            handler = HttpRequestHandler()
+            response = handler.handle(message, self.routes)
 
-            # Send the reply
-            resource = request.url
-            response = None
-            
-            if resource in self.routes.keys():
-                response = HttpResponse(HttpStatus.OK)
-                response.data = self.routes[resource]()
-
-            else:
-                response = HttpResponse(HttpStatus.Not_Found)
-            
             connection.send(response.response)
-            logger.http_connection(request, response.status_code)
 
-            # Close connection too client (but not welcoming socket)
             connection.close()
 
 server = HttpServer()
 
+# perhaps pass in the http request object as a parameter in index. It is then the job of the routing function to
+# check if the required headers are present, since there are no mandatory headers in a general http request.
+# then provide a function to throw an "http error". Flask uses abort, so something like this would work.
 @server.route("/")
-def index():
+def index(request):
     with open("test.html") as f:
         data = f.read()
 
