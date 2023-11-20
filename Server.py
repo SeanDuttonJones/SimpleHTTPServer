@@ -2,17 +2,19 @@
 from socket import *
 from threading import Thread
 import datetime
-from email.utils import formatdate
+import time
+from email.utils import formatdate, parsedate_to_datetime
 from inspect import getfullargspec
-from os import isatty
+import os
 
 class HttpStatus():
-    OK                  = 200
-    Not_Modified        = 304
-    Bad_Request         = 400
-    Forbidden           = 403
-    Not_Found           = 404
-    Length_Required     = 411
+    OK                      = 200
+    Not_Modified            = 304
+    Bad_Request             = 400
+    Forbidden               = 403
+    Not_Found               = 404
+    Length_Required         = 411
+    Internal_Server_Error   = 500
 
     CODES = [
         200,
@@ -20,7 +22,8 @@ class HttpStatus():
         400,
         403,
         404,
-        411
+        411,
+        500
     ]
 
     _messages = {
@@ -29,7 +32,8 @@ class HttpStatus():
         Bad_Request: "Bad Request",
         Forbidden: "Forbidden",
         Not_Found: "Not Found",
-        Length_Required: "Length Required"
+        Length_Required: "Length Required",
+        Internal_Server_Error: "Internal Server Error"
     }
 
     @staticmethod
@@ -95,7 +99,7 @@ class ConsoleLogger():
         print(log)
 
     def _is_color_capable(self):
-        return isatty(0)
+        return os.isatty(0)
 
 class HttpRequestParser():
     
@@ -131,7 +135,19 @@ class HttpException(Exception):
 class HttpRequestHandler():
     
     def __init__(self):
+        self.RESOURCE_DIR = "./resources"
+        
         self.logger = ConsoleLogger()
+        self.resources = []
+
+        for (dirpath, dirnames, filenames) in os.walk(self.RESOURCE_DIR):
+            dirpath = dirpath.replace(self.RESOURCE_DIR, "")
+
+            for filename in filenames:
+                path = os.path.join(dirpath, filename).replace("\\", "/")
+                path = path.removeprefix("/")
+                path = "/" + path
+                self.resources.append(path)
 
     def handle(self, message, routes):
         parser = HttpRequestParser()
@@ -163,6 +179,17 @@ class HttpRequestHandler():
             except HttpException as e:
                 response = HttpResponse(e.status_code)
 
+        elif url in self.resources:
+            if "If-Modified-Since" in request.headers.keys():
+                header_value = request.headers["If-Modified-Since"]
+                date = parsedate_to_datetime(header_value)
+                if not self._if_modified_since(self.RESOURCE_DIR + url, date):
+                    response = HttpResponse(HttpStatus.Not_Modified)
+                else:
+                    response = self._create_static_resource_response(self.RESOURCE_DIR + url)
+            else:
+                response = self._create_static_resource_response(self.RESOURCE_DIR + url)
+                
         else:
             response = HttpResponse(HttpStatus.Not_Found)
         # --------------------------------------------
@@ -176,8 +203,29 @@ class HttpRequestHandler():
             d = data
 
         response.data = d
+
+    def _if_modified_since(self, path, datetime):
+        modified_date = os.path.getmtime(path) # already in unix time
+        unixtime = time.mktime(datetime.timetuple()) # convert datetime obj to unix time
+        return modified_date > unixtime
+
+    def _load_resource(self, path):
+        with open(path) as f:
+            data = f.read()
+
+        return data
+    
+    def _create_static_resource_response(self, resource_path):
+        response = None
+        try:
+            response = HttpResponse(HttpStatus.OK)
+            data = self._load_resource(resource_path)
+            self._set_response_data(response, data)
+        except:
+            response = HttpResponse(HttpStatus.Internal_Server_Error)
+
+        return response
             
-        
 class HttpRequest():
     def __init__(self):
         self._method = None
@@ -373,9 +421,6 @@ class HttpServer(Thread):
 
 server = HttpServer()
 
-# perhaps pass in the http request object as a parameter in index. It is then the job of the routing function to
-# check if the required headers are present, since there are no mandatory headers in a general http request.
-# then provide a function to throw an "http error". Flask uses abort, so something like this would work.
 @server.route("/")
 def index(request):
     with open("test.html") as f:
