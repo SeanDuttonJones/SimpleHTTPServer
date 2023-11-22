@@ -499,27 +499,27 @@ class HttpServer(Thread):
         raise HttpException(status_code)
     
     def run(self):
-        port = 80
-        tcp_socket = socket(AF_INET, SOCK_STREAM)
-        tcp_socket.bind(("", port))
-        tcp_socket.listen(1)
+            port = 80
+            tcp_socket = socket(AF_INET, SOCK_STREAM)
+            tcp_socket.bind(("", port))
+            tcp_socket.listen(1)
 
-        logger = ConsoleLogger()
-        logger.server("running...")
+            logger = ConsoleLogger()
+            logger.server("running...")
 
-        while True:
-            connection, addr = tcp_socket.accept()
+            while True:
+                connection, addr = tcp_socket.accept()
 
-            message = connection.recv(1024).decode()
+                message = connection.recv(1024).decode()
 
-            # Handle HTTP request
-            handler = HttpRequestHandler()
-            response = handler.handle(message, self.routes)
+                # Handle HTTP request
+                handler = HttpRequestHandler()
+                response = handler.handle(message, self.routes)
 
-            connection.send(response.response)
+                connection.send(response.response)
 
-            connection.close()
-
+                connection.close()
+            
 class ProxyServer(Thread):
     def __init__(self):
         Thread.__init__(self)
