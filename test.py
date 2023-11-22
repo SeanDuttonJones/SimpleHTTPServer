@@ -10,6 +10,14 @@ from email.utils import formatdate
 # r = s.send(prepped)
 # print(r.status_code)
 
-r = requests.get("http://localhost/test.html", headers={"If-Modified-Since": formatdate(timeval=None, localtime=False, usegmt=True)})
+# r = requests.get("http://localhost/test.html", headers={"If-Modified-Since": formatdate(timeval=None, localtime=False, usegmt=True)})
+# print(r.text)
+# print(r.status_code)
+
+proxy = {
+    "http": "http://localhost:8888"
+}
+
+r = requests.delete("http://eu.httpbin.org/delete", proxies=proxy)
 print(r.text)
 print(r.status_code)
