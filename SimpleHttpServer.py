@@ -93,7 +93,7 @@ class ConsoleLogger():
             version = request.version
             headers = request.headers
 
-            log = f"{color_code}[Http]: {headers['Host']} - - [{now}] \"{method} {resource} {version}\" {status_code} {HttpStatus.message(status_code)}"
+            log = f"{color_code}[Http]: {headers['host']} - - [{now}] \"{method} {resource} {version}\" {status_code} {HttpStatus.message(status_code)}"
         
         print(log)
 
@@ -109,7 +109,7 @@ class ConsoleLogger():
         version = request.version
         headers = request.headers
 
-        log = f"{color_code}[Http]: {headers['Host']} - - [{now}] \"{method} {resource} {version}\""
+        log = f"{color_code}[Http]: {headers['host']} - - [{now}] \"{method} {resource} {version}\""
         
         print(log)
 
@@ -128,6 +128,7 @@ class HttpRequestParser():
                 break
 
             key, value = map(str.strip, header.split(": "))
+            key = key.lower()
             headers[key] = value
 
         data = split[-1]
@@ -156,16 +157,64 @@ class HttpResponseParser():
                 break
 
             key, value = map(str.strip, header.split(": "))
+            key = key.lower()
             headers[key] = value
-
-        data = split[-1]
 
         response = HttpResponse(status_code)
         response.version = version
         response.headers = headers
-        response.data = data
+
+        if split[-1] != "":
+            response.data = split[-1]
 
         return response
+
+class HttpResponseStreamParser():
+    
+    def __init__(self):
+        self.response = None
+
+        self.recvd_headers = False
+        self.header_length = 0
+        self.header_end_index = 0
+
+        self.data = None
+
+        self.bytes_recvd = 0
+        self.content_length = 0
+
+    def parseNext(self, message):
+        self.bytes_recvd += len(message)
+
+        decode = message.decode()
+        if self.data is None:
+            self.data = decode
+        else:
+            self.data += decode
+
+        if not self.recvd_headers:
+            if "\r\n\r\n" in self.data:
+                self.recvd_headers = True
+
+                self.header_end_index = self.data.find("\r\n\r\n")
+                self.header_length = len(self.data[:self.header_end_index + 4].encode())
+
+                parser = HttpResponseParser()
+                header_response = parser.parse(self.data[:self.header_end_index + 4])
+                self.response = header_response
+
+                if "content-length" not in header_response.headers.keys():
+                    response = HttpResponse(HttpStatus.Length_Required)
+                    return response
+                
+                self.content_length = int(header_response.headers["content-length"])
+        
+        if self.recvd_headers:
+            if self.bytes_recvd - self.header_length == self.content_length:
+                self.response.data = self.data[self.header_end_index + 4:]
+                return self.response
+        
+        return None
 
 class HttpException(Exception):
     """ Raised when an Http exception occurs """
@@ -203,7 +252,7 @@ class HttpRequestHandler():
             self.logger.http_connection(response.status_code, request)
             return response
         
-        if request.method in ["POST", "PUT"] and "Content-Length" not in request.headers.keys():
+        if request.method in ["POST", "PUT"] and "content-length" not in request.headers.keys():
             response = HttpResponse(HttpStatus.Length_Required)
             self.logger.http_connection(response.status_code, request)
             return response
@@ -223,8 +272,8 @@ class HttpRequestHandler():
                 response = HttpResponse(e.status_code)
 
         elif url in self.resources:
-            if "If-Modified-Since" in request.headers.keys():
-                header_value = request.headers["If-Modified-Since"]
+            if "if-modified-since" in request.headers.keys():
+                header_value = request.headers["if-modified-since"]
                 date = parsedate_to_datetime(header_value)
                 if not self._if_modified_since(self.RESOURCE_DIR + url, date):
                     response = HttpResponse(HttpStatus.Not_Modified)
@@ -285,12 +334,12 @@ class HttpProxyRequestHandler():
             self.logger.http_connection(response.status_code, request)
             return response
 
-        if request.method in ["POST", "PUT"] and "Content-Length" not in request.headers.keys():
+        if request.method in ["POST", "PUT"] and "content-length" not in request.headers.keys():
             response = HttpResponse(HttpStatus.Length_Required)
             self.logger.http_connection(response.status_code, request)
             return response
 
-        host = request.headers["Host"]
+        host = request.headers["host"]
 
         # Modify request
         index = request.url.find(host)
@@ -307,24 +356,13 @@ class HttpProxyRequestHandler():
         self.logger.proxy_connection(request)
 
         # Wait for response from destination webserver
-        headers = sock.recv(1024)
-        response_parser = HttpResponseParser()
-        response = response_parser.parse(headers.decode())
+        response_stream_parser = HttpResponseStreamParser()
+        response = None
+        while response is None:
+            message = sock.recv(1024)
+            response = response_stream_parser.parseNext(message)
 
-        if "Content-Length" not in response.headers.keys():
-            response = HttpResponse(HttpStatus.Length_Required)
-            self.logger.http_connection(response.status_code, request)
-            return response
-        
-        content_length = int(response.headers["Content-Length"])
-        
-        connection.send(headers)
-        data_recv = 0
-        while data_recv < content_length:
-            data = sock.recv(1024)
-            connection.send(data)
-            data_recv += len(data)
-
+        connection.send(response.response)
         sock.close()
 
 class HttpRequest():
@@ -371,7 +409,7 @@ class HttpRequest():
     
     @headers.setter
     def headers(self, value):
-        self._headers = value
+        self._headers = dict((k.lower(), v) for k,v in value.items())
 
     @property
     def data(self):
@@ -402,9 +440,9 @@ class HttpResponse():
         self._status_code = status_code
         
         self._headers = {
-            "Date": formatdate(timeval=None, localtime=False, usegmt=True),
-            "Server": "SimpleHTTPServer/1.0",
-            "Content-Type": "text/html; charset=utf-8"
+            "date": formatdate(timeval=None, localtime=False, usegmt=True),
+            "server": "SimpleHTTPServer/1.0",
+            "content-type": "text/html; charset=utf-8"
         }
 
         self._data = None
@@ -437,6 +475,8 @@ class HttpResponse():
     
     @headers.setter
     def headers(self, value, overwrite=False):
+        value = dict((k.lower(), v) for k,v in value.items())
+        
         if overwrite:
             self.headers = value
         
@@ -449,16 +489,17 @@ class HttpResponse():
     @data.setter
     def data(self, value):
         self._data = value
+        self._headers["content-length"] = self._content_length(value)
 
     def _generate_response(self):
         line_break = "\r\n"
         
         # set status line
         response = f"{self._version} {self._status_code} {HttpStatus.message(self._status_code)}" + line_break
-        
+
         # set headers
         for _, (key, value) in enumerate(self._headers.items()):
-            response += f"{key.lower().capitalize()}: {value}" + line_break
+            response += f"{key.lower()}: {value}" + line_break
         
         # add additional line break to indicate next section is the data
         response += line_break
@@ -466,21 +507,26 @@ class HttpResponse():
 
         # set data
         if self._data is not None:
-            if isinstance(self._data, str):
-                data = self._data.encode()
-                content_length = len(data) // 2
-                response += data
-                self._headers["Content-Length"] = content_length
+            data = self._data.encode()
+            response += data
 
         return response
     
+    def _content_length(self, content):
+        if isinstance(content, str):
+            encoded = content.encode()
+            return len(encoded)
+        
+        return 0
+
     @property
     def response(self):
         return self._generate_response()
 
 class HttpServer(Thread):
-    def __init__(self):
+    def __init__(self, port=80):
         Thread.__init__(self)
+        self.port = port
         self.routes = {}
 
     def route(self, endpoint):
@@ -499,9 +545,8 @@ class HttpServer(Thread):
         raise HttpException(status_code)
     
     def run(self):
-            port = 80
             tcp_socket = socket(AF_INET, SOCK_STREAM)
-            tcp_socket.bind(("", port))
+            tcp_socket.bind(("", self.port))
             tcp_socket.listen(1)
 
             logger = ConsoleLogger()
@@ -521,13 +566,13 @@ class HttpServer(Thread):
                 connection.close()
             
 class ProxyServer(Thread):
-    def __init__(self):
+    def __init__(self, port=8888):
         Thread.__init__(self)
+        self.port = port
     
     def run(self):
-        port = 8888
         tcp_socket = socket(AF_INET, SOCK_STREAM)
-        tcp_socket.bind(("", port))
+        tcp_socket.bind(("", self.port))
         tcp_socket.listen(1)
 
         logger = ConsoleLogger()

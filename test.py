@@ -18,6 +18,12 @@ proxy = {
     "http": "http://localhost:8888"
 }
 
-r = requests.delete("http://eu.httpbin.org/delete", proxies=proxy)
+# r = requests.get("http://eu.httpbin.org/")
+# # print(r.text)
+# print(r.headers)
+# print(r.status_code)
+
+r = requests.post("http://eu.httpbin.org/post", proxies=proxy)
 print(r.text)
+print(r.headers)
 print(r.status_code)
