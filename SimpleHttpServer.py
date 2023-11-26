@@ -63,10 +63,12 @@ class ConsoleLogger():
 
     def server(self, message):
         color_code = ""
+        color_reset = ""
         if self._is_color_capable():
             color_code = "\033[0;35m" # purple
+            color_reset = "\033[0m"
         
-        log = f"{color_code}[Server]: {message}"
+        log = f"{color_code}[Server]: {message}{color_reset}"
         print(log)
 
     def http_connection(self, status_code, request=None):
@@ -76,7 +78,9 @@ class ConsoleLogger():
         status_code: Http status code
         """
         color_code = ""
+        color_reset = ""
         if self._is_color_capable():
+            color_reset = "\033[0m"
             if status_code == HttpStatus.OK:
                 color_code = "\033[1;32m" # light green
             else:
@@ -85,7 +89,7 @@ class ConsoleLogger():
         now = datetime.datetime.now()
         
         if request is None:
-            log = f"{color_code}[Http]: [{now}] {status_code} {HttpStatus.message(status_code)}"
+            log = f"{color_code}[Http]: [{now}] {status_code} {HttpStatus.message(status_code)}{color_reset}"
 
         else:
             method = request.method
@@ -93,14 +97,16 @@ class ConsoleLogger():
             version = request.version
             headers = request.headers
 
-            log = f"{color_code}[Http]: {headers['host']} - - [{now}] \"{method} {resource} {version}\" {status_code} {HttpStatus.message(status_code)}"
+            log = f"{color_code}[Http]: {headers['host']} - - [{now}] \"{method} {resource} {version}\" {status_code} {HttpStatus.message(status_code)}{color_reset}"
         
         print(log)
 
     def proxy_connection(self, request):
         color_code = ""
+        color_reset = ""
         if self._is_color_capable():
             color_code = "\033[1;32m" # light green
+            color_reset = "\033[0m"
 
         now = datetime.datetime.now()
 
@@ -109,7 +115,7 @@ class ConsoleLogger():
         version = request.version
         headers = request.headers
 
-        log = f"{color_code}[Http]: {headers['host']} - - [{now}] \"{method} {resource} {version}\""
+        log = f"{color_code}[Http]: {headers['host']} - - [{now}] \"{method} {resource} {version}\"{color_reset}"
         
         print(log)
 
@@ -119,9 +125,11 @@ class ConsoleLogger():
 class HttpRequestParser():
     
     def parse(self, message):
-        split = message.split("\r\n")
+        headers, data = message.split("\r\n\r\n")[:2]
+        split = headers.split("\r\n")
         method, url, version = map(str.strip, split[0].split(" "))
 
+        header_end_index = 0
         headers = {}
         for header in split[1:]:
             if header == "": # signals double \r\n \r\n. This means we have reached the end of the headers
@@ -130,8 +138,10 @@ class HttpRequestParser():
             key, value = map(str.strip, header.split(": "))
             key = key.lower()
             headers[key] = value
+            header_end_index += 1
 
-        data = split[-1]
+        if data.strip() == "":
+            data = None
 
         request = HttpRequest()
         request.method = method
@@ -139,7 +149,7 @@ class HttpRequestParser():
         request.version = version
         request.headers = headers
         request.data = data
-
+       
         return request
 
 class HttpResponseParser():
@@ -252,7 +262,7 @@ class HttpRequestHandler():
             self.logger.http_connection(response.status_code, request)
             return response
         
-        if request.method in ["POST", "PUT"] and "content-length" not in request.headers.keys():
+        if "content-length" not in request.headers.keys() and request.data is not None:
             response = HttpResponse(HttpStatus.Length_Required)
             self.logger.http_connection(response.status_code, request)
             return response

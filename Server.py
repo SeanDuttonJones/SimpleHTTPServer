@@ -1,6 +1,6 @@
 from SimpleHttpServer import HttpServer
 
-server = HttpServer()
+server = HttpServer(port=80)
 
 @server.route("/")
 def index(request):
